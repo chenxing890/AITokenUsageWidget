@@ -1,0 +1,40 @@
+# macOS 系统文件
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode 编译产物与缓存
+build/
+DerivedData/
+*.o
+*.d
+*.dia
+*.swiftdeps
+*.modulemap
+
+# XcodeGen 生成的工程（project.yml 才是源，运行 ./setup.sh 重新生成）
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# 本地签名与描述文件（可能含个人开发者信息）
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.entitlements.local
+
+# 分发产物（请通过 GitHub Releases 发布，不要提交二进制）
+dist/
+
+# 日志
+*.log
+Logs/
+
+# 环境变量与本地配置（防止误提交密钥）
+.env
+.env.*
+*.local
+
+# Swift Package Manager
+.build/
+Package.resolved
