@@ -3,8 +3,14 @@ import WidgetKit
 
 /// 主 App 设置界面：左侧供应商列表 + 右侧配置详情（含小组件实时预览）。
 struct SettingsView: View {
+    /// 侧边栏选择值：dashboard 为仪表盘（供应商之外的固定项），provider 为某个供应商
+    private enum SidebarSelection: Hashable {
+        case dashboard
+        case provider(UUID)
+    }
+
     @State private var configs: [ProviderConfig] = []
-    @State private var selectedID: UUID?
+    @State private var selection: SidebarSelection?
     @State private var testResults: [UUID: ProviderUsage] = [:]
     @State private var testingIDs: Set<UUID> = []
     @State private var savedToast = false
@@ -29,7 +35,9 @@ struct SettingsView: View {
         .preferredColorScheme(theme.colorScheme)
         .onAppear {
             if configs.isEmpty { configs = ConfigStore.shared.loadConfigs() }
-            if selectedID == nil { selectedID = configs.first?.id }
+            if selection == nil {
+                selection = hasActiveProvider ? .dashboard : configs.first.map { .provider($0.id) }
+            }
             theme = ConfigStore.shared.loadTheme()
             alertsEnabled = ConfigStore.shared.loadAlertsEnabled()
             alertThreshold = ConfigStore.shared.loadAlertThreshold()
@@ -37,6 +45,10 @@ struct SettingsView: View {
         // 配置改动即时落盘，无需手动保存
         .onChange(of: configs) { newConfigs in
             ConfigStore.shared.saveConfigs(newConfigs)
+            // 仪表盘仅在至少一个供应商启用时存在；全部关闭时切回第一家供应商
+            if selection == .dashboard && !newConfigs.contains(where: \.isEnabled) {
+                selection = newConfigs.first.map { .provider($0.id) }
+            }
         }
         // 主题改动即时落盘并刷新小组件
         .onChange(of: theme) { newTheme in
@@ -56,7 +68,7 @@ struct SettingsView: View {
     }
 
     private var selectedBinding: Binding<ProviderConfig>? {
-        guard let id = selectedID,
+        guard case .provider(let id) = selection,
               let index = configs.firstIndex(where: { $0.id == id }) else { return nil }
         return $configs[index]
     }
@@ -89,6 +101,8 @@ struct SettingsView: View {
             ProviderDetailColumn(config: config,
                                  testResults: $testResults,
                                  testingIDs: $testingIDs)
+        } else if selection == .dashboard && hasActiveProvider {
+            DashboardView(configs: configs)
         } else {
             Text("从左侧选择一个供应商")
                 .foregroundStyle(.secondary)
@@ -96,16 +110,26 @@ struct SettingsView: View {
         }
     }
 
+    private var hasActiveProvider: Bool { configs.contains(where: \.isEnabled) }
+
     // MARK: - 侧边栏
 
     private var sidebar: some View {
         // 不用 safeAreaInset（macOS 13+），VStack 底部放状态栏兼容 macOS 12
         VStack(spacing: 0) {
-            List(selection: $selectedID) {
+            List(selection: $selection) {
+            Section("概览") {
+                if hasActiveProvider {
+                    Label("仪表盘", systemImage: "square.grid.2x2.fill")
+                        .font(.body.weight(.medium))
+                        .padding(.vertical, 2)
+                        .tag(SidebarSelection.dashboard)
+                }
+            }
             Section("供应商") {
                 ForEach(configs) { config in
                     SidebarRow(config: config)
-                        .tag(config.id)
+                        .tag(SidebarSelection.provider(config.id))
                 }
             }
             Section("外观") {
@@ -154,10 +178,30 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    if hasActiveProvider {
+                        legacySection("概览") {
+                            Button {
+                                selection = .dashboard
+                            } label: {
+                                Label("仪表盘", systemImage: "square.grid.2x2.fill")
+                                    .font(.body.weight(.medium))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .fill(selection == .dashboard
+                                                  ? Color.accentColor.opacity(0.18)
+                                                  : Color.clear)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                     legacySection("供应商") {
                         ForEach(configs) { config in
                             Button {
-                                selectedID = config.id
+                                selection = .provider(config.id)
                             } label: {
                                 SidebarRow(config: config)
                                     .padding(.horizontal, 8)
@@ -165,7 +209,7 @@ struct SettingsView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(
                                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .fill(selectedID == config.id
+                                            .fill(selection == .provider(config.id)
                                                   ? Color.accentColor.opacity(0.18)
                                                   : Color.clear)
                                     )
@@ -466,6 +510,97 @@ private struct ProviderDetailColumn: View {
                 testResults[config.id] = usage
                 testingIDs.remove(config.id)
             }
+        }
+    }
+}
+
+// MARK: - 仪表盘面板
+
+/// 仪表盘：与 Widget large 尺寸一致的纵向卡片聚合视图，按启用开关动态组合。
+/// - 每个供应商一行（同 Widget large 布局规则：完整进度条 + 重置倒计时）
+/// - 未填 Key 的供应商显示模拟数据（带橙色标记），已配置的显示实际用量
+/// - 顶部「刷新」立即重拉全部已启用供应商
+private struct DashboardView: View {
+    let configs: [ProviderConfig]
+    @State private var usages: [String: ProviderUsage] = [:] // key = kind.rawValue
+    @State private var isRefreshing = false
+
+    private var active: [ProviderConfig] { configs.filter(\.isEnabled) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("仪表盘")
+                        .font(.title2.weight(.bold))
+                    Spacer()
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Button {
+                        refresh()
+                    } label: {
+                        Label("刷新", systemImage: "arrow.clockwise")
+                    }
+                    .controlSize(.large)
+                    .disabled(isRefreshing)
+                }
+                VStack(spacing: 10) {
+                    ForEach(active) { config in
+                        dashboardCard(config)
+                            .frame(height: 132)
+                            .overlay(alignment: .topTrailing) {
+                                if isSimulated(config) {
+                                    Text("模拟")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.orange))
+                                        .padding(5)
+                                }
+                            }
+                    }
+                }
+                Text("按已启用的供应商动态聚合 · 未配置的显示模拟数据")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(24)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .task(id: active.map { "\($0.kind.rawValue):\($0.cleanAPIKey)" }.joined()) {
+            await fetchAll()
+        }
+    }
+
+    private func dashboardCard(_ config: ProviderConfig) -> some View {
+        let usage = usages[config.kind.rawValue] ?? .placeholder(kind: config.kind)
+        return ProviderCardView(usage: usage, compact: false, dense: false)
+    }
+
+    private func isSimulated(_ config: ProviderConfig) -> Bool {
+        usages[config.kind.rawValue] == nil
+    }
+
+    private func refresh() {
+        Task { await fetchAll() }
+    }
+
+    private func fetchAll() async {
+        guard !active.isEmpty else { return }
+        isRefreshing = true
+        let activeConfigs = active
+        // 无 Key 的供应商直接取模拟数据，不发请求
+        let keyed = activeConfigs.filter { $0.hasKey }
+        let results = await UsageService.fetchAll(configs: keyed)
+        await MainActor.run {
+            for (config, usage) in zip(keyed, results) {
+                usages[config.kind.rawValue] = usage
+            }
+            isRefreshing = false
         }
     }
 }

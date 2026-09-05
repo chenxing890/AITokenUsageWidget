@@ -143,24 +143,50 @@ struct ProviderCardView: View {
         }
     }
 
-    /// 极简单行：标题 + 百分比（或累计文本），无进度条
+    /// 极简单行：标题 + 百分比（或累计文本），下挂超细迷你进度条（含健康配额线）
     private func denseWindowRow(_ window: UsageWindow) -> some View {
-        HStack(spacing: 2) {
-            Text(window.shortTitle)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 1)
-            if let percent = window.usedPercent {
-                Text("\(Int(percent.rounded()))%")
-                    .monospacedDigit()
-                    .fontWeight(.medium)
-            } else if let text = window.usedText {
-                Text(text)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 2) {
+                Text(window.shortTitle)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 1)
+                if let percent = window.usedPercent {
+                    Text("\(Int(percent.rounded()))%")
+                        .monospacedDigit()
+                        .fontWeight(.medium)
+                } else if let text = window.usedText {
+                    Text(text)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+            }
+            if window.usedPercent != nil {
+                miniProgressBar(percent: window.usedPercent ?? 0,
+                                healthLine: window.healthLinePercent)
             }
         }
         .font(.system(size: 9))
+    }
+
+    /// dense 模式迷你进度条：高度 2pt，不挤占布局
+    private func miniProgressBar(percent: Double, healthLine: Double?) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+                Capsule()
+                    .fill(levelColor(percent))
+                    .frame(width: max(2, geo.size.width * min(max(percent, 0) / 100, 1)))
+                if let healthLine {
+                    Capsule()
+                        .fill(Color.gray.opacity(0.75))
+                        .frame(width: 1.5, height: 2)
+                        .offset(x: max(0, geo.size.width * healthLine / 100 - 0.75))
+                }
+            }
+        }
+        .frame(height: 2)
     }
 
     private func windowRow(_ window: UsageWindow) -> some View {
@@ -205,11 +231,11 @@ struct ProviderCardView: View {
                     .lineLimit(1)
                 }
             }
-            progressBar(percent: window.usedPercent ?? 0)
+            progressBar(percent: window.usedPercent ?? 0, healthLine: window.healthLinePercent)
         })
     }
 
-    private func progressBar(percent: Double) -> some View {
+    private func progressBar(percent: Double, healthLine: Double? = nil) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
@@ -220,6 +246,13 @@ struct ProviderCardView: View {
                                        startPoint: .leading, endPoint: .trailing)
                     )
                     .frame(width: max(3, geo.size.width * min(max(percent, 0) / 100, 1)))
+                if let healthLine {
+                    // 健康配额线：随时间推进的刻度线，用量超过它即超前消耗
+                    Capsule()
+                        .fill(Color.gray.opacity(0.75))
+                        .frame(width: 1.5, height: 4)
+                        .offset(x: max(0, geo.size.width * healthLine / 100 - 0.75))
+                }
             }
         }
         .frame(height: 4)
@@ -244,5 +277,19 @@ extension UsageWindow {
         case "本月总额", "30 天累计": return "30d"
         default: return title
         }
+    }
+}
+
+/// 7 天窗口的「健康配额线」：7 天额度按时间均摊，健康节奏是每天用掉总额的 1/7。
+/// 线的位置 = 窗口已过时间比例，从重置时 0% 线性推进（第 1 天末 14.28%、第 2 天末
+/// 28.57% … 第 6 天末 85.71%）。当前用量超过该线，即意味着超前消耗、挤占后续份额。
+extension UsageWindow {
+    private static let sevenDayInterval: TimeInterval = 7 * 24 * 3600
+
+    var healthLinePercent: Double? {
+        guard title == "7 天", let reset = resetTime else { return nil }
+        let remaining = reset.timeIntervalSinceNow
+        let percent = (1 - remaining / Self.sevenDayInterval) * 100
+        return min(max(percent, 0), 100)
     }
 }

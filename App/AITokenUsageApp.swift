@@ -1,11 +1,15 @@
 import SwiftUI
 import UserNotifications
+import WidgetKit
 
 @main
 struct AITokenUsageApp: App {
     init() {
         // 请求通知授权：用量超阈值时由小组件扩展发送系统通知
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // 主动触发小组件重载，促使 chronod 重新发现并注册扩展
+        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.getCurrentConfigurations { _ in }
     }
 
     var body: some Scene {
