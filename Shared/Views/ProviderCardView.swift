@@ -280,16 +280,22 @@ extension UsageWindow {
     }
 }
 
-/// 7 天窗口的「健康配额线」：7 天额度按时间均摊，健康节奏是每天用掉总额的 1/7。
-/// 线的位置 = 窗口已过时间比例，从重置时 0% 线性推进（第 1 天末 14.28%、第 2 天末
-/// 28.57% … 第 6 天末 85.71%）。当前用量超过该线，即意味着超前消耗、挤占后续份额。
+/// 7 天窗口的「健康配额线」：7 天额度按天均摊，健康节奏是每天用掉总额的 1/7。
+/// 线按「当天目标配额」定位：窗口起点 = 重置时间 − 7 天，已完整过整天数 d = floor(已过天数)，
+/// 位置 = d/7（第 1 天 14.28%、第 2 天 28.57% … 第 6 天 85.71%）。最后一天（d=6）封顶
+/// 85.71%，不画到 100%（进度条末端无意义）；第 0 天（刚重置）不画线。当前用量超过该线，
+/// 即意味着超前消耗、挤占后续份额。
 extension UsageWindow {
-    private static let sevenDayInterval: TimeInterval = 7 * 24 * 3600
+    private static let dayInterval: TimeInterval = 24 * 3600
 
     var healthLinePercent: Double? {
         guard title == "7 天", let reset = resetTime else { return nil }
-        let remaining = reset.timeIntervalSinceNow
-        let percent = (1 - remaining / Self.sevenDayInterval) * 100
-        return min(max(percent, 0), 100)
+        let start = reset.addingTimeInterval(-7 * Self.dayInterval)
+        let elapsed = Date().timeIntervalSince(start)
+        guard elapsed > 0 else { return nil }
+        var d = Int(elapsed / Self.dayInterval) // 已完整过整天数
+        guard d >= 1 else { return nil }        // 第 0 天：起点，不画线
+        d = min(d, 6)                            // 最后一天封顶第 6 天（85.71%）
+        return Double(d) / 7.0 * 100.0
     }
 }
