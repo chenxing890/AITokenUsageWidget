@@ -68,8 +68,9 @@ enum UsageService {
 
     // MARK: - Kimi Code（5 小时 / 7 天 / 月度总额）
 
-    /// GET /usages —— limits 中 duration=300 的为 5 小时窗口，顶层 usage 为 7 天窗口。
-    /// 月度总额走非官方网页接口（需 kimi-auth Cookie，可选；失败不影响前两个窗口）。
+    /// GET /usages —— limits 中 duration=300 的为 5 小时窗口；顶层 usage 为 7 天窗口（老套餐）。
+    /// 新套餐无 7 天窗口，改为返回 usages.limit_month_total / limit_month_code（月度总额 + 月度 Coding，
+    /// 免 Cookie）。月度总额仍可通过网页 billing 接口（kimi-auth Cookie，可选）拿到绝对数值版本。
     private static func fetchKimi(_ config: ProviderConfig) async throws -> ProviderUsage {
         guard let url = config.apiURL(path: "/usages") else {
             throw APIClient.APIError.invalidURL
@@ -86,13 +87,22 @@ enum UsageService {
                 windows.append(window)
             }
         }
-        // 7 天窗口：顶层 usage
+        // 7 天窗口（老套餐）：顶层 usage
         if let window = makeWindow("7 天", detail: json["usage"]) {
             windows.append(window)
         }
-        // 月度总额（可选）：网页 billing 接口 totalQuota
-        if config.hasExtraToken, let monthly = await fetchKimiMonthly(cookie: config.extraToken) {
-            windows.append(monthly)
+        // 月度窗口（新套餐，免 Cookie）：usages.limit_month_total / limit_month_code
+        // 若用户配置了 Cookie，用网页接口的绝对数值版覆盖「本月总额」（信息更详细）。
+        let monthlyCookieWindow: UsageWindow? = config.hasExtraToken
+            ? await fetchKimiMonthly(cookie: config.extraToken)
+            : nil
+        if let total = makeRatioWindow("本月总额", detail: json["usages"]?["limit_month_total"]) {
+            windows.append(monthlyCookieWindow ?? total)
+        } else if let cookie = monthlyCookieWindow {
+            windows.append(cookie)
+        }
+        if let code = makeRatioWindow("本月 Coding", detail: json["usages"]?["limit_month_code"]) {
+            windows.append(code)
         }
 
         guard !windows.isEmpty else { throw APIClient.APIError.emptyResponse }
@@ -101,6 +111,18 @@ enum UsageService {
             currency: nil, totalBalance: nil, grantedBalance: nil,
             toppedUpBalance: nil, isAvailable: nil,
             windows: windows, fetchedAt: Date()
+        )
+    }
+
+    /// Kimi 新套餐月度窗口结构：{ used_ratio: 0..1, reset_time }，只给百分比。
+    private static func makeRatioWindow(_ title: String, detail: JSONValue?) -> UsageWindow? {
+        guard let detail, let ratio = detail["used_ratio"]?.double else { return nil }
+        let reset = detail["reset_time"]?.isoDate
+        return UsageWindow(
+            title: title,
+            usedPercent: min(max(ratio * 100, 0), 100),
+            usedText: nil,
+            resetTime: reset
         )
     }
 
