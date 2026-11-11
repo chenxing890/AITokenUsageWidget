@@ -91,7 +91,7 @@ enum UsageService {
         if let window = makeWindow("7 天", detail: json["usage"]) {
             windows.append(window)
         }
-        // 月度窗口（新套餐，免 Cookie）：usages.limit_month_total / limit_month_code
+        // 月度窗口（新套餐，免 Cookie）：usages.limit_month_total（与 limit_month_code 数据基本重合，只显示总额即可）
         // 若用户配置了 Cookie，用网页接口的绝对数值版覆盖「本月总额」（信息更详细）。
         let monthlyCookieWindow: UsageWindow? = config.hasExtraToken
             ? await fetchKimiMonthly(cookie: config.extraToken)
@@ -100,9 +100,6 @@ enum UsageService {
             windows.append(monthlyCookieWindow ?? total)
         } else if let cookie = monthlyCookieWindow {
             windows.append(cookie)
-        }
-        if let code = makeRatioWindow("本月 Coding", detail: json["usages"]?["limit_month_code"]) {
-            windows.append(code)
         }
 
         guard !windows.isEmpty else { throw APIClient.APIError.emptyResponse }
