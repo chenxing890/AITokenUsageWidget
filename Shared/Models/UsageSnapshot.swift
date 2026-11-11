@@ -30,8 +30,12 @@ struct ProviderUsage: Codable, Equatable, Identifiable {
         }
     }
 
-    var id: String { "\(kind.rawValue)|\(displayName)" }
+    /// 唯一标识：优先用 ProviderConfig 的 UUID（同 kind 多实例互不冲突），
+    /// 旧缓存 JSON 无 configID 时回退到 kind+displayName。
+    var id: String { configID?.uuidString ?? "\(kind.rawValue)|\(displayName)" }
 
+    /// 对应的 ProviderConfig.id（同 kind 多实例用于区分；旧数据可为 nil）
+    let configID: UUID?
     let kind: ProviderKind
     let displayName: String
     let state: State
@@ -67,18 +71,20 @@ struct UsageWindow: Codable, Equatable, Identifiable {
 // MARK: - 占位数据（Widget 预览 / 快照回退）
 
 extension ProviderUsage {
-    static func placeholder(kind: ProviderKind) -> ProviderUsage {
+    /// 占位数据。`configID` / `name` 用于多实例场景：同 kind 不同实例的占位卡也互不冲突。
+    static func placeholder(kind: ProviderKind, configID: UUID? = nil, name: String? = nil) -> ProviderUsage {
+        let displayName = name ?? kind.displayName
         switch kind {
         case .deepseek:
             return ProviderUsage(
-                kind: .deepseek, displayName: kind.displayName, state: .ok,
+                configID: configID, kind: .deepseek, displayName: displayName, state: .ok,
                 currency: "CNY", totalBalance: 88.50,
                 grantedBalance: 10.00, toppedUpBalance: 78.50, isAvailable: true,
                 windows: [], fetchedAt: Date()
             )
         case .kimi:
             return ProviderUsage(
-                kind: .kimi, displayName: kind.displayName, state: .ok,
+                configID: configID, kind: .kimi, displayName: displayName, state: .ok,
                 currency: nil, totalBalance: nil, grantedBalance: nil,
                 toppedUpBalance: nil, isAvailable: nil,
                 windows: [
@@ -92,7 +98,7 @@ extension ProviderUsage {
             )
         case .glm:
             return ProviderUsage(
-                kind: .glm, displayName: kind.displayName, state: .ok,
+                configID: configID, kind: .glm, displayName: displayName, state: .ok,
                 currency: nil, totalBalance: nil, grantedBalance: nil,
                 toppedUpBalance: nil, isAvailable: nil,
                 windows: [

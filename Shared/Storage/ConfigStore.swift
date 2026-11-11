@@ -136,7 +136,7 @@ final class ConfigStore {
 
     // MARK: - 供应商配置
 
-    /// 读取全部配置；首次调用时生成默认配置，并自动补齐后续版本新增的供应商。
+    /// 读取全部配置；首次调用时生成默认配置。同 kind 允许多个实例，不再按 kind 补齐。
     func loadConfigs() -> [ProviderConfig] {
         let payload = loadPayload()
         if payload.configs.isEmpty {
@@ -146,14 +146,26 @@ final class ConfigStore {
             savePayload(next)
             return fresh
         }
-        let existing = Set(payload.configs.map(\.kind))
-        let missing = ProviderKind.allCases.filter { !existing.contains($0) }
-        if !missing.isEmpty {
+        let migrated = migrateWidgetSelectionIfNeeded(payload.configs)
+        if migrated != payload.configs {
             var next = payload
-            next.configs += missing.map { ProviderConfig(kind: $0) }
+            next.configs = migrated
             savePayload(next)
         }
-        return payload.configs
+        return migrated
+    }
+
+    /// 一次性迁移：旧版本没有 showInWidget 字段，全部默认为 false 会让升级后 Widget 空白。
+    /// 判定：所有实例都没勾过 showInWidget 且已启用实例数 ≤ 3 → 自动把已启用实例勾选上 Widget。
+    private func migrateWidgetSelectionIfNeeded(_ configs: [ProviderConfig]) -> [ProviderConfig] {
+        guard configs.allSatisfy({ !$0.showInWidget }) else { return configs }
+        let enabled = configs.filter(\.isEnabled)
+        guard !enabled.isEmpty, enabled.count <= 3 else { return configs }
+        var migrated = configs
+        for i in migrated.indices where migrated[i].isEnabled {
+            migrated[i].showInWidget = true
+        }
+        return migrated
     }
 
     func saveConfigs(_ configs: [ProviderConfig]) {
@@ -162,9 +174,14 @@ final class ConfigStore {
         savePayload(payload)
     }
 
-    /// 已启用的供应商
+    /// 已启用的供应商（仪表盘等需要全量启用实例的场景使用）
     func activeConfigs() -> [ProviderConfig] {
         loadConfigs().filter(\.isEnabled)
+    }
+
+    /// 通知中心小组件取数入口：已启用 + 用户勾选上 Widget 的实例
+    func widgetConfigs() -> [ProviderConfig] {
+        loadConfigs().filter { $0.isEnabled && $0.showInWidget }
     }
 
     // MARK: - 主题偏好（App 窗口与小组件共用）

@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var theme: ThemePreference = .system
     @State private var alertsEnabled = true
     @State private var alertThreshold: Double = 80
+    @State private var deleteCandidate: ProviderConfig?
 
     var body: some View {
         rootContent
@@ -65,6 +66,14 @@ struct SettingsView: View {
             ConfigStore.shared.saveAlertedKeys([])
             WidgetCenter.shared.reloadAllTimelines()
         }
+        .alert(item: $deleteCandidate) { config in
+            Alert(
+                title: Text("删除 \(config.name)？"),
+                message: Text("该实例的 API Key 与自定义名称将被移除，此操作不可撤销。"),
+                primaryButton: .destructive(Text("删除")) { delete(config) },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private var selectedBinding: Binding<ProviderConfig>? {
@@ -100,7 +109,8 @@ struct SettingsView: View {
         if let config = selectedBinding {
             ProviderDetailColumn(config: config,
                                  testResults: $testResults,
-                                 testingIDs: $testingIDs)
+                                 testingIDs: $testingIDs,
+                                 allConfigs: $configs)
         } else if selection == .dashboard && hasActiveProvider {
             DashboardView(configs: configs)
         } else {
@@ -126,10 +136,32 @@ struct SettingsView: View {
                         .tag(SidebarSelection.dashboard)
                 }
             }
-            Section("供应商") {
+            Section {
                 ForEach(configs) { config in
                     SidebarRow(config: config)
                         .tag(SidebarSelection.provider(config.id))
+                        .contextMenu {
+                            Button(role: .destructive) { deleteCandidate = config } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+                }
+            } header: {
+                HStack {
+                    Text("供应商")
+                    Spacer()
+                    Menu {
+                        ForEach(ProviderKind.allCases, id: \.self) { kind in
+                            Button(kind.displayName) { addProvider(kind) }
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 18, height: 18)
+                    .help("添加供应商实例（同模型可多个）")
                 }
             }
             Section("外观") {
@@ -215,7 +247,23 @@ struct SettingsView: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) { deleteCandidate = config } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
+                            }
                         }
+                        Menu {
+                            ForEach(ProviderKind.allCases, id: \.self) { kind in
+                                Button(kind.displayName) { addProvider(kind) }
+                            }
+                        } label: {
+                            Label("添加供应商实例", systemImage: "plus.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
                     }
                     legacySection("外观") {
                         Picker("主题", selection: $theme) {
@@ -294,6 +342,24 @@ struct SettingsView: View {
             withAnimation { savedToast = false }
         }
     }
+
+    // MARK: - 新增 / 删除实例
+
+    private func addProvider(_ kind: ProviderKind) {
+        let config = ProviderConfig(kind: kind)
+        configs.append(config)
+        selection = .provider(config.id)
+    }
+
+    private func delete(_ config: ProviderConfig) {
+        configs.removeAll { $0.id == config.id }
+        testResults[config.id] = nil
+        testingIDs.remove(config.id)
+        if case .provider(let id) = selection, id == config.id {
+            selection = hasActiveProvider ? .dashboard : configs.first.map { .provider($0.id) }
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+    }
 }
 
 // MARK: - 侧边栏行
@@ -327,12 +393,30 @@ private struct ProviderDetailColumn: View {
     @Binding var config: ProviderConfig
     @Binding var testResults: [UUID: ProviderUsage]
     @Binding var testingIDs: Set<UUID>
+    @Binding var allConfigs: [ProviderConfig]
 
     /// 已配置 Key 时自动拉取的实际用量（用于预览，无需手动点测试）
     @State private var liveUsage: ProviderUsage?
+    @State private var showWidgetCapAlert = false
 
     private var kind: ProviderKind { config.kind }
     private var isTesting: Bool { testingIDs.contains(config.id) }
+    private var widgetEnabledCount: Int { allConfigs.filter(\.showInWidget).count }
+
+    /// 「在小组件显示」开关：置 true 时校验最多 3 个；触顶弹 alert 并回退
+    private var showInWidgetBinding: Binding<Bool> {
+        Binding(
+            get: { config.showInWidget },
+            set: { newValue in
+                if newValue && !config.showInWidget && widgetEnabledCount >= 3 {
+                    showWidgetCapAlert = true
+                    return
+                }
+                config.showInWidget = newValue
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -358,6 +442,11 @@ private struct ProviderDetailColumn: View {
             }
             liveUsage = await UsageService.fetch(config: config)
         }
+        .alert("最多 3 个实例显示在小组件", isPresented: $showWidgetCapAlert) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text("通知中心中等尺寸最多容纳 3 张卡片。请先在其他实例上关闭「在小组件显示」。")
+        }
     }
 
     // MARK: 头部
@@ -376,7 +465,7 @@ private struct ProviderDetailColumn: View {
             Toggle("启用", isOn: $config.isEnabled)
                 .toggleStyle(.switch)
                 .labelsHidden()
-                .help("启用后卡片会显示在通知中心小组件中")
+                .help("启用后卡片会出现在主界面仪表盘；上 Widget 还需打开下方开关")
         }
     }
 
@@ -396,6 +485,16 @@ private struct ProviderDetailColumn: View {
                 TextField("", text: $config.customName)
                     .textFieldStyle(.roundedBorder)
             }
+            Toggle(isOn: showInWidgetBinding) {
+                HStack(spacing: 6) {
+                    Text("在小组件显示")
+                        .font(.callout)
+                    Text("最多 3 个")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .help("勾选后此实例会出现在通知中心小组件中（已启用 \(widgetEnabledCount)/3）")
             if kind.supportsCookie {
                 Field(label: "kimi-auth Cookie（可选 · 用于月度总用量）") {
                     SecureField("", text: $config.extraToken)
@@ -495,7 +594,7 @@ private struct ProviderDetailColumn: View {
 
     /// 预览数据：手动测试结果 > 自动拉取的实际用量 > 模拟占位数据
     private var previewUsage: ProviderUsage {
-        testResults[config.id] ?? liveUsage ?? .placeholder(kind: kind)
+        testResults[config.id] ?? liveUsage ?? .placeholder(kind: kind, configID: config.id, name: config.name)
     }
 
     private var isSimulated: Bool {
@@ -522,7 +621,7 @@ private struct ProviderDetailColumn: View {
 /// - 顶部「刷新」立即重拉全部已启用供应商
 private struct DashboardView: View {
     let configs: [ProviderConfig]
-    @State private var usages: [String: ProviderUsage] = [:] // key = kind.rawValue
+    @State private var usages: [UUID: ProviderUsage] = [:] // key = config.id（同 kind 多实例互不覆盖）
     @State private var isRefreshing = false
 
     private var active: [ProviderConfig] { configs.filter(\.isEnabled) }
@@ -571,18 +670,19 @@ private struct DashboardView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .task(id: active.map { "\($0.kind.rawValue):\($0.cleanAPIKey)" }.joined()) {
+        .task(id: active.map { "\($0.id.uuidString):\($0.cleanAPIKey)" }.joined()) {
             await fetchAll()
         }
     }
 
     private func dashboardCard(_ config: ProviderConfig) -> some View {
-        let usage = usages[config.kind.rawValue] ?? .placeholder(kind: config.kind)
+        let usage = usages[config.id]
+            ?? .placeholder(kind: config.kind, configID: config.id, name: config.name)
         return ProviderCardView(usage: usage, compact: false, dense: false)
     }
 
     private func isSimulated(_ config: ProviderConfig) -> Bool {
-        usages[config.kind.rawValue] == nil
+        usages[config.id] == nil
     }
 
     private func refresh() {
@@ -598,7 +698,7 @@ private struct DashboardView: View {
         let results = await UsageService.fetchAll(configs: keyed)
         await MainActor.run {
             for (config, usage) in zip(keyed, results) {
-                usages[config.kind.rawValue] = usage
+                usages[config.id] = usage
             }
             isRefreshing = false
         }

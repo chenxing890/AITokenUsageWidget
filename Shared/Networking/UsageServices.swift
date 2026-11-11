@@ -19,7 +19,7 @@ enum UsageService {
     static func fetch(config: ProviderConfig) async -> ProviderUsage {
         guard config.hasKey else {
             return ProviderUsage(
-                kind: config.kind, displayName: config.name, state: .missingKey,
+                configID: config.id, kind: config.kind, displayName: config.name, state: .missingKey,
                 currency: nil, totalBalance: nil, grantedBalance: nil,
                 toppedUpBalance: nil, isAvailable: nil, windows: [], fetchedAt: Date()
             )
@@ -32,7 +32,7 @@ enum UsageService {
             }
         } catch {
             return ProviderUsage(
-                kind: config.kind, displayName: config.name,
+                configID: config.id, kind: config.kind, displayName: config.name,
                 state: .error(APIClient.friendlyMessage(for: error)),
                 currency: nil, totalBalance: nil, grantedBalance: nil,
                 toppedUpBalance: nil, isAvailable: nil, windows: [], fetchedAt: Date()
@@ -56,7 +56,7 @@ enum UsageService {
             throw APIClient.APIError.emptyResponse
         }
         return ProviderUsage(
-            kind: .deepseek, displayName: config.name, state: .ok,
+            configID: config.id, kind: .deepseek, displayName: config.name, state: .ok,
             currency: info?["currency"]?.string,
             totalBalance: info?["total_balance"]?.double,
             grantedBalance: info?["granted_balance"]?.double,
@@ -97,7 +97,7 @@ enum UsageService {
 
         guard !windows.isEmpty else { throw APIClient.APIError.emptyResponse }
         return ProviderUsage(
-            kind: .kimi, displayName: config.name, state: .ok,
+            configID: config.id, kind: .kimi, displayName: config.name, state: .ok,
             currency: nil, totalBalance: nil, grantedBalance: nil,
             toppedUpBalance: nil, isAvailable: nil,
             windows: windows, fetchedAt: Date()
@@ -219,7 +219,7 @@ enum UsageService {
 
         guard !windows.isEmpty else { throw APIClient.APIError.emptyResponse }
         return ProviderUsage(
-            kind: .glm, displayName: config.name, state: .ok,
+            configID: config.id, kind: .glm, displayName: config.name, state: .ok,
             currency: nil, totalBalance: nil, grantedBalance: nil,
             toppedUpBalance: nil, isAvailable: nil,
             windows: windows, fetchedAt: Date()

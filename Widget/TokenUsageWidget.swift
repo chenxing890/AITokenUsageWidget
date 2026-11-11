@@ -42,7 +42,7 @@ struct TokenUsageTimelineProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<UsageEntry>) -> Void) {
         Task {
-            let configs = ConfigStore.shared.activeConfigs()
+            let configs = ConfigStore.shared.widgetConfigs()
             let usages: [ProviderUsage]
             if configs.isEmpty {
                 usages = []
@@ -58,7 +58,7 @@ struct TokenUsageTimelineProvider: TimelineProvider {
         }
     }
 
-    /// 用量达到阈值（主界面可配，默认 80%）发系统通知（每个「供应商-窗口」只通知一次，
+    /// 用量达到阈值（主界面可配，默认 80%）发系统通知（每个「实例-窗口」只通知一次，
     /// 回落到阈值 -10% 以下后重置，以便额度周期重置或再次冲高时能重新提醒）。
     private static func sendUsageAlerts(_ usages: [ProviderUsage]) {
         guard ConfigStore.shared.loadAlertsEnabled() else { return }
@@ -67,9 +67,10 @@ struct TokenUsageTimelineProvider: TimelineProvider {
         var alerted = ConfigStore.shared.loadAlertedKeys()
         var changed = false
         for usage in usages where usage.state == .ok {
+            let configID = usage.configID?.uuidString ?? usage.kind.rawValue
             for window in usage.windows {
                 guard let percent = window.usedPercent else { continue }
-                let key = "\(usage.kind.rawValue)-\(window.title)"
+                let key = "\(configID)-\(window.title)"
                 if percent >= threshold {
                     guard !alerted.contains(key) else { continue }
                     alerted.insert(key)
